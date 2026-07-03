@@ -1,0 +1,7 @@
+id: claude-fable
+adapter: claude-code
+model: claude-fable-5
+pricing_key: claude-subscription
+cost_mode: subscription
+execution: local
+harness_version: 2.1.198

@@ -1,0 +1,15 @@
+version: replace-with-provider-pricing-date
+currency: USD
+rates: {}
+subscriptions: {}
+# Add one entry per pricing_key before building a cost report:
+# rates:
+#   gpt-5.5:
+#     input_per_million: 0
+#     output_per_million: 0
+#     cache_read_per_million: 0
+#     cache_write_per_million: 0
+# subscriptions:
+#   claude-subscription:
+#     monthly_usd: 0
+#     scans_per_month: 0

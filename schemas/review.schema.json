@@ -1,0 +1,31 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "review_id", "reviewer_id", "blinded_finding_id", "disposition", "scores", "hallucinated_references", "unsafe_payload", "duplicate_of", "notes", "created_at"],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "review_id": { "type": "string" },
+    "reviewer_id": { "type": "string" },
+    "blinded_finding_id": { "type": "string" },
+    "disposition": { "enum": ["accepted", "rejected", "duplicate"] },
+    "scores": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["validity", "evidence", "exploitability", "severity_calibration", "remediation", "regression_test"],
+      "properties": {
+        "validity": { "type": "integer", "minimum": 0, "maximum": 4 },
+        "evidence": { "type": "integer", "minimum": 0, "maximum": 3 },
+        "exploitability": { "type": "integer", "minimum": 0, "maximum": 3 },
+        "severity_calibration": { "type": "integer", "minimum": 0, "maximum": 2 },
+        "remediation": { "type": "integer", "minimum": 0, "maximum": 2 },
+        "regression_test": { "type": "integer", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "hallucinated_references": { "type": "integer", "minimum": 0 },
+    "unsafe_payload": { "type": "boolean" },
+    "duplicate_of": { "type": ["string", "null"] },
+    "notes": { "type": "string" },
+    "created_at": { "type": "string", "format": "date-time" }
+  }
+}

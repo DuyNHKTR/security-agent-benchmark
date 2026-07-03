@@ -1,0 +1,36 @@
+services:
+  egress-proxy:
+    image: ubuntu/squid@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38cedd05a176e1cc0ba29e3bbe029
+    volumes:
+      - ./squid.conf:/etc/squid/squid.conf:ro
+    networks:
+      - isolated
+      - provider_egress
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+
+  agent:
+    image: security-agent-benchmark-agent:local
+    depends_on:
+      - egress-proxy
+    networks:
+      - isolated
+    environment:
+      HTTP_PROXY: http://egress-proxy:3128
+      HTTPS_PROXY: http://egress-proxy:3128
+      NO_PROXY: localhost,127.0.0.1
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      BENCHMARK_ROOT: /benchmark
+    volumes:
+      - ${BENCH_ROOT:?Set BENCH_ROOT}:/benchmark:ro
+      - ${BENCH_TARGET_DIR:?Set BENCH_TARGET_DIR}:/workspace/target:rw
+      - ${BENCH_OUTPUT_DIR:?Set BENCH_OUTPUT_DIR}:/output:rw
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 1024
+    init: true
+
+networks:
+  isolated:
+    internal: true
+  provider_egress: {}

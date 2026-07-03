@@ -1,0 +1,7 @@
+id: claude-opus-4-8
+adapter: claude-code
+model: claude-opus-4-8
+pricing_key: claude-subscription
+cost_mode: subscription
+execution: local
+harness_version: 2.1.198

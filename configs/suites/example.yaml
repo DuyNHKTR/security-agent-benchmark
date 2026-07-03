@@ -1,0 +1,17 @@
+id: enterprise-security-v1
+description: Exploitability-focused security triage benchmark
+prompt_version: v1
+pricing_catalog: configs/pricing/example.yaml
+cases:
+  - id: simple
+    repository: https://github.com/OWNER/SIMPLE_REPOSITORY.git
+    commit: REPLACE_WITH_FULL_COMMIT_SHA
+    finding_limit: 5
+  - id: complex
+    repository: https://github.com/OWNER/COMPLEX_REPOSITORY.git
+    commit: REPLACE_WITH_FULL_COMMIT_SHA
+    finding_limit: 8
+profiles:
+  - configs/models/claude-fable.yaml
+  - configs/models/claude-opus.yaml
+  - configs/models/codex-gpt-5-5.yaml
