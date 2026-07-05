@@ -2,6 +2,16 @@
 
 Reproducible, harness-neutral benchmark for exploitability-focused repository security assessment. The initial profiles target Claude Fable, Claude Opus, and GPT-5.5, while adapters and model profiles are independently extensible.
 
+Two evaluation modes share the same runner:
+
+- **Quality review** (default) — blinded human reviewers score finding quality and the
+  pipeline computes validated security value per dollar. Measures how *good* a model's
+  findings are; has no recall.
+- **Ground-truth detection** — point a case at a security-**fix** commit; the harness
+  scans the commit before it, derives the answer key from the fix diff, and scores
+  **recall and localization** automatically. Measures how much a model *finds*. No manual
+  vulnerability labeling required. See [Ground-truth detection](docs/ground-truth.md).
+
 ## Requirements
 
 - Node.js 22+
@@ -49,6 +59,7 @@ Run the same commands for `simple` and `complex`. Use both Claude profiles with 
 
 - [Architecture](docs/architecture.md)
 - [Methodology](docs/methodology.md)
+- [Ground-truth detection](docs/ground-truth.md)
 - [Codex runbook](docs/run-codex.md)
 - [Claude Code runbook](docs/run-claude-code.md)
 - [Adding a model or harness](docs/adding-adapters.md)

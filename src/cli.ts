@@ -7,6 +7,8 @@ import { buildComparisonReport } from "./lib/reporting.js";
 import { adjudicateReviews, buildReviewQueue, runReview } from "./lib/review.js";
 import { executeCodex, importManualUsage, prepareClaudeInstructions, prepareRun, validateExistingRun } from "./lib/runs.js";
 import { validateReport } from "./lib/schema.js";
+import { buildTruthForSuite } from "./lib/truth.js";
+import { buildDetectionReport } from "./lib/score.js";
 
 function findRoot(start: string): string {
   if (process.env.BENCHMARK_ROOT && existsSync(path.join(process.env.BENCHMARK_ROOT, "schemas", "report.schema.json"))) {
@@ -48,6 +50,8 @@ Commands:
   bench review start --reviewer <id> [--suite <suite.yaml>]
   bench review adjudicate [--suite <suite.yaml>]
   bench report build [--suite <suite.yaml>]
+  bench truth build [--suite <suite.yaml>]
+  bench score report [--suite <suite.yaml>] [--tolerance N]
 `);
   process.exit(exitCode);
 }
@@ -148,6 +152,21 @@ async function main(): Promise<void> {
 
   if (args[0] === "report" && args[1] === "build") {
     console.log(`Reports: ${await buildComparisonReport(root, suite.id)}`);
+    return;
+  }
+
+  if (args[0] === "truth" && args[1] === "build") {
+    const truths = await buildTruthForSuite(root, suite);
+    for (const truth of truths) {
+      const lines = truth.regions.reduce((sum, region) => sum + (region.end_line - region.start_line + 1), 0);
+      console.log(`${truth.case_id}: scan ${truth.scan_commit.slice(0, 12)} · ${truth.regions.length} region(s), ${lines} line(s) across ${new Set(truth.regions.map((region) => region.file)).size} file(s)`);
+    }
+    return;
+  }
+
+  if (args[0] === "score" && args[1] === "report") {
+    const tolerance = args.includes("--tolerance") ? numberOption(args, "--tolerance") : 5;
+    console.log(`Detection report: ${await buildDetectionReport(root, suite, tolerance)}`);
     return;
   }
 

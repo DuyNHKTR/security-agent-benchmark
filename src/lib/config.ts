@@ -46,11 +46,18 @@ export async function selectProfile(root: string, suite: SuiteConfig, idOrPath: 
   return profile;
 }
 
+const FULL_SHA = /^[a-fA-F0-9]{40,64}$/;
+
 export function suiteCase(suite: SuiteConfig, id: string) {
   const selected = suite.cases.find((candidate) => candidate.id === id);
   if (!selected) throw new Error(`Case not found in suite: ${id}`);
-  if (!/^[a-fA-F0-9]{40,64}$/.test(selected.commit)) {
-    throw new Error(`Case ${id} must use a full immutable commit SHA`);
+  const hasCommit = typeof selected.commit === "string" && FULL_SHA.test(selected.commit);
+  const hasFix = typeof selected.fix_commit === "string" && FULL_SHA.test(selected.fix_commit);
+  if (selected.commit && selected.fix_commit) {
+    throw new Error(`Case ${id} must set either commit or fix_commit, not both`);
+  }
+  if (!hasCommit && !hasFix) {
+    throw new Error(`Case ${id} must use a full immutable commit SHA in commit or fix_commit`);
   }
   return selected;
 }

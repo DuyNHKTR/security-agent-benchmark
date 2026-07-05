@@ -1,0 +1,23 @@
+id: cve-detection-v1
+description: Ground-truth vulnerability detection from security-fix commits
+prompt_version: v1
+pricing_catalog: configs/pricing/example.yaml
+# Known-fix cases: give the commit that FIXED a security bug. The harness scans
+# fix_commit~1 (the last vulnerable state) and derives ground truth from the fix
+# diff — you never label vulnerabilities yourself. Use a full immutable SHA.
+# `difficulty` is an optional hint that only stratifies the detection report.
+cases:
+  - id: xss-fix
+    repository: https://github.com/OWNER/REPOSITORY.git
+    fix_commit: REPLACE_WITH_FULL_SECURITY_FIX_COMMIT_SHA
+    difficulty: easy
+    finding_limit: 8
+  - id: sqli-fix
+    repository: https://github.com/OWNER/REPOSITORY.git
+    fix_commit: REPLACE_WITH_FULL_SECURITY_FIX_COMMIT_SHA
+    difficulty: hard
+    finding_limit: 8
+profiles:
+  - configs/models/claude-fable.yaml
+  - configs/models/claude-opus.yaml
+  - configs/models/codex-gpt-5-5.yaml
