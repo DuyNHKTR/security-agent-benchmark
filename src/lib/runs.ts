@@ -2,7 +2,7 @@ import { access, copyFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ModelProfile, RunMetadata, SuiteCase, SuiteConfig, TokenUsage } from "../types.js";
 import { createRunId, ensureDir, readJson, resolveFrom, sha256, writeJsonAtomic, writeTextAtomic } from "./fs.js";
-import { createWorkspace, prepareFixture } from "./fixtures.js";
+import { createWorkspace, prepareFixture, scanCommit } from "./fixtures.js";
 import { renderPrompt } from "./prompt.js";
 import { calculateCost } from "./pricing.js";
 import { runProcess } from "./process.js";
@@ -24,7 +24,8 @@ export async function prepareRun(root: string, suite: SuiteConfig, fixture: Suit
   const target = path.join(dir, "target");
   await ensureDir(dir);
   const cache = await prepareFixture(root, suite.id, fixture);
-  await createWorkspace(cache, target, fixture.commit);
+  const commit = await scanCommit(cache, fixture);
+  await createWorkspace(cache, target, commit);
   const prompt = await renderPrompt(root, suite.prompt_version, fixture, profile.adapter, {
     target,
     output: dir,
@@ -42,7 +43,7 @@ export async function prepareRun(root: string, suite: SuiteConfig, fixture: Suit
     pricing_key: profile.pricing_key,
     cost_mode: profile.cost_mode,
     repository: fixture.repository,
-    commit: fixture.commit,
+    commit,
     prompt_sha256: sha256(prompt),
     state: "prepared",
     started_at: null,

@@ -1,9 +1,16 @@
 export type AdapterName = "codex" | "claude-code";
 
+export type CaseDifficulty = "easy" | "medium" | "hard";
+
 export interface SuiteCase {
   id: string;
   repository: string;
-  commit: string;
+  /** Vulnerable commit to scan directly. Set this OR fix_commit, not both. */
+  commit?: string;
+  /** Security-fix commit. The harness scans fix_commit~1 and derives ground truth from the fix diff. */
+  fix_commit?: string;
+  /** Optional analyst hint used only to stratify the detection report. */
+  difficulty?: CaseDifficulty;
   finding_limit: number;
 }
 
@@ -127,4 +134,36 @@ export interface ScanReviewDecision {
   prioritization_quality: number;
   notes: string;
   created_at: string;
+}
+
+export interface TruthRegion {
+  file: string;
+  start_line: number;
+  end_line: number;
+}
+
+export interface TruthCase {
+  schema_version: "1.0";
+  case_id: string;
+  repository: string;
+  fix_commit: string;
+  scan_commit: string;
+  difficulty: CaseDifficulty | "unknown";
+  regions: TruthRegion[];
+}
+
+export interface RunScore {
+  schema_version: "1.0";
+  suite_id: string;
+  case_id: string;
+  profile_id: string;
+  run_id: string;
+  state: RunMetadata["state"];
+  difficulty: CaseDifficulty | "unknown";
+  detected: boolean;
+  localization: "exact" | "fuzzy" | "none";
+  matched_regions: number;
+  total_regions: number;
+  total_findings: number;
+  findings_on_target: number;
 }
