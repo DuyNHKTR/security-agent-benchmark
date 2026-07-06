@@ -35,9 +35,15 @@ export function runProcess(command: string, args: string[], options: {
     });
     child.on("error", reject);
     child.on("close", (code) => {
-      log?.end();
-      resolve({ exitCode: code ?? 1, stdout: Buffer.concat(chunks).toString("utf8"), stderr: Buffer.concat(errors).toString("utf8") });
+      const complete = () => resolve({
+        exitCode: code ?? 1,
+        stdout: Buffer.concat(chunks).toString("utf8"),
+        stderr: Buffer.concat(errors).toString("utf8")
+      });
+      if (log) log.end(complete);
+      else complete();
     });
+    log?.on("error", reject);
     if (options.stdin !== undefined) child.stdin.end(options.stdin);
     else child.stdin.end();
   });
