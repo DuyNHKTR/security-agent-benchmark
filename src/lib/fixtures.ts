@@ -41,4 +41,5 @@ export async function createWorkspace(cache: string, target: string, commit: str
   await ensureDir(path.dirname(target));
   await requireSuccess("git", ["clone", "--local", "--no-hardlinks", cache, target]);
   await requireSuccess("git", ["checkout", "--force", "--detach", commit], target);
+  await rm(path.join(target, ".git"), { recursive: true, force: true });
 }

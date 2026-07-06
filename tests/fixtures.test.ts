@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { prepareFixture, createWorkspace } from "../src/lib/fixtures.js";
@@ -19,5 +19,6 @@ test("pins a local fixture and creates an independent workspace", async () => {
   const cache = await prepareFixture(root, "suite", { id: "simple", repository: source, commit, finding_limit: 1 });
   const target = path.join(root, "run", "target");
   await createWorkspace(cache, target, commit);
-  assert.equal(await requireSuccess("git", ["rev-parse", "HEAD"], target), commit);
+  assert.equal((await readFile(path.join(target, "app.js"), "utf8")).trim(), "console.log('fixture');");
+  await assert.rejects(access(path.join(target, ".git")));
 });
