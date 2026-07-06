@@ -1,6 +1,7 @@
 import { readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { CaseDifficulty, RunMetadata, RunScore, SecurityReport, SuiteConfig, TruthCase, TruthRegion } from "../types.js";
+import { loadProfiles } from "./config.js";
 import { ensureDir, readJson, writeJsonAtomic } from "./fs.js";
 import { prepareFixture } from "./fixtures.js";
 import { deriveTruth } from "./truth.js";
@@ -14,7 +15,7 @@ function normalizePath(value: string): string {
 function samefile(a: string, b: string): boolean {
   const left = normalizePath(a);
   const right = normalizePath(b);
-  return left === right || left.endsWith(`/${right}`) || right.endsWith(`/${left}`);
+  return left === right;
 }
 
 function rangesOverlap(a1: number, a2: number, b1: number, b2: number, tolerance: number): boolean {
@@ -114,7 +115,11 @@ export async function buildDetectionReport(root: string, suite: SuiteConfig, tol
     if (better) latest.set(key, { metadata, dir: path.dirname(runFile) });
   }
 
-  const profileIds = [...new Set([...latest.values()].map((entry) => entry.metadata.profile_id))].sort();
+  const configuredProfileIds = (await loadProfiles(root, suite)).map((profile) => profile.id);
+  const profileIds = [...new Set([
+    ...configuredProfileIds,
+    ...[...latest.values()].map((entry) => entry.metadata.profile_id)
+  ])].sort();
   const scores: RunScore[] = [];
   for (const profileId of profileIds) {
     for (const fixture of cases) {

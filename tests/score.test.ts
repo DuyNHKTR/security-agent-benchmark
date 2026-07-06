@@ -50,6 +50,10 @@ test("scores exact, fuzzy, and miss against ground-truth regions", () => {
   const miss = scoreReport(regions, missReport);
   assert.equal(miss.detected, false);
   assert.equal(miss.findings_on_target, 0);
+
+  const ambiguousBasename = validReport();
+  ambiguousBasename.findings[0].locations[0].path = "server.js";
+  assert.equal(scoreReport(regions, ambiguousBasename).detected, false);
 });
 
 test("derives ground truth from a fix commit and builds a detection report", async () => {
@@ -70,8 +74,17 @@ test("derives ground truth from a fix commit and builds a detection report", asy
   const suite: SuiteConfig = {
     id: "s", description: "", prompt_version: "v1", pricing_catalog: "",
     cases: [{ id: "c1", repository: source, fix_commit: fixSha, difficulty: "easy", finding_limit: 5 }],
-    profiles: []
+    profiles: ["missing-profile.yaml"]
   };
+  await writeFile(path.join(root, "missing-profile.yaml"), [
+    "id: model-y",
+    "adapter: codex",
+    "model: y",
+    "pricing_key: y",
+    "cost_mode: token",
+    "execution: docker",
+    ""
+  ].join("\n"));
 
   const runDir = path.join(root, "runs", "s", "c1", "model-x", "run-1");
   const metadata: RunMetadata = {
@@ -92,6 +105,9 @@ test("derives ground truth from a fix commit and builds a detection report", asy
   assert.equal(detection.profiles[0].profile_id, "model-x");
   assert.equal(detection.profiles[0].recall, 1);
   assert.equal(detection.profiles[0].detected, 1);
+  assert.equal(detection.profiles[1].profile_id, "model-y");
+  assert.equal(detection.profiles[1].recall, 0);
+  assert.equal(detection.profiles[1].no_result, 1);
   assert.equal(detection.matrix[0].localization, "exact");
   const html = await readFile(path.join(outputDir, "detection.html"), "utf8");
   assert.match(html, /detection matrix/i);
