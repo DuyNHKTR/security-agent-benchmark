@@ -5,3 +5,6 @@ pricing_key: claude-subscription
 cost_mode: subscription
 execution: local
 harness_version: 2.1.198
+# Set from vendor documentation before benchmarking; leaving it unset disables
+# the contamination flag for this profile rather than guessing.
+# training_cutoff: YYYY-MM-DD

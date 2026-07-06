@@ -11,6 +11,12 @@ export interface SuiteCase {
   fix_commit?: string;
   /** Optional analyst hint used only to stratify the detection report. */
   difficulty?: CaseDifficulty;
+  /**
+   * Accepted CWE id(s) for the patched vulnerability, copied from the advisory
+   * (e.g. "CWE-79"). When set, a location hit only counts as detected if some
+   * on-target finding reports a matching CWE; otherwise it scores location-only.
+   */
+  cwe?: string | string[];
   finding_limit: number;
 }
 
@@ -31,6 +37,11 @@ export interface ModelProfile {
   cost_mode: "token" | "subscription";
   execution: "docker" | "local";
   harness_version?: string;
+  /**
+   * Model training-data cutoff (ISO date). Cases whose fix commit predates it
+   * are flagged as memorization-risk in the detection report.
+   */
+  training_cutoff?: string;
 }
 
 export interface TokenUsage {
@@ -40,6 +51,13 @@ export interface TokenUsage {
   cache_write_tokens: number;
   provenance: "harness" | "transcript" | "manual" | "unavailable";
 }
+
+/**
+ * "scan" runs target the vulnerable commit (fix_commit~1). "control" runs
+ * target fix_commit itself: the bug is provably gone, so any finding that
+ * lands on the patched region is a confirmed false positive. Absent = "scan".
+ */
+export type RunVariant = "scan" | "control";
 
 export interface RunMetadata {
   schema_version: "1.0";
@@ -53,6 +71,7 @@ export interface RunMetadata {
   cost_mode: "token" | "subscription";
   repository: string;
   commit: string;
+  variant?: RunVariant;
   prompt_sha256: string;
   state: "prepared" | "running" | "complete" | "incomplete" | "invalid";
   started_at: string | null;
@@ -148,22 +167,43 @@ export interface TruthCase {
   repository: string;
   fix_commit: string;
   scan_commit: string;
+  /** Committer date of fix_commit (ISO). Compared to profile training cutoffs. */
+  fix_committed_at: string;
   difficulty: CaseDifficulty | "unknown";
+  /** Accepted CWE ids from the suite case (advisory metadata), normalized. */
+  expected_cwe: string[];
+  /** Vulnerable-line regions in scan-commit (pre-image) coordinates. */
   regions: TruthRegion[];
+  /** The same fix hunks in fix-commit (post-image) coordinates, for control runs. */
+  control_regions: TruthRegion[];
 }
 
+export type SemanticMatch = "match" | "mismatch" | "not_configured";
+
 export interface RunScore {
-  schema_version: "1.0";
+  schema_version: "1.1";
   suite_id: string;
   case_id: string;
   profile_id: string;
   run_id: string;
+  variant: RunVariant;
   state: RunMetadata["state"];
   difficulty: CaseDifficulty | "unknown";
+  /** Location hit + CWE agreement (when the case configures expected CWEs). */
   detected: boolean;
+  /** Any span-capped finding location overlaps a truth region. */
+  located: boolean;
+  /** CWE agreement of on-target findings against the case's expected CWEs. */
+  semantic: SemanticMatch;
   localization: "exact" | "fuzzy" | "none";
   matched_regions: number;
   total_regions: number;
   total_findings: number;
   findings_on_target: number;
+  /** Findings whose only truth overlap came from a location wider than the span cap. */
+  findings_oversized_only: number;
+  /** On-target finding counts by model-reported confidence, for calibration. */
+  on_target_by_confidence: Record<Finding["confidence"], { on_target: number; total: number }>;
+  /** True when the fix commit predates the profile's training cutoff (memorization possible). */
+  contamination_risk: boolean | null;
 }

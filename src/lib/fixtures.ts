@@ -1,6 +1,6 @@
 import { access, rm } from "node:fs/promises";
 import path from "node:path";
-import type { SuiteCase } from "../types.js";
+import type { RunVariant, SuiteCase } from "../types.js";
 import { ensureDir } from "./fs.js";
 import { requireSuccess } from "./process.js";
 
@@ -11,12 +11,16 @@ async function exists(file: string): Promise<boolean> {
 /**
  * The commit a model actually scans. For a plain case that is `commit`; for a
  * known-fix case it is the parent of `fix_commit` (the last vulnerable state).
+ * A control run scans `fix_commit` itself — the patched code — so findings on
+ * the fixed region are confirmed false positives.
  * Requires the fixture cache to already contain fix_commit (post-fetch).
  */
-export async function scanCommit(cache: string, fixture: SuiteCase): Promise<string> {
+export async function scanCommit(cache: string, fixture: SuiteCase, variant: RunVariant = "scan"): Promise<string> {
   if (fixture.fix_commit) {
-    return (await requireSuccess("git", ["rev-parse", `${fixture.fix_commit}~1`], cache)).toLowerCase();
+    const target = variant === "control" ? fixture.fix_commit : `${fixture.fix_commit}~1`;
+    return (await requireSuccess("git", ["rev-parse", target], cache)).toLowerCase();
   }
+  if (variant === "control") throw new Error(`Case ${fixture.id} has no fix_commit; control runs need a known-fix case`);
   if (!fixture.commit) throw new Error(`Case ${fixture.id} has neither commit nor fix_commit`);
   return fixture.commit.toLowerCase();
 }

@@ -41,8 +41,8 @@ function usage(exitCode = 2): never {
 
 Commands:
   bench suite prepare <suite.yaml>
-  bench run codex <case> --profile <id> [--suite <suite.yaml>]
-  bench run claude prepare <case> --profile <id> [--suite <suite.yaml>]
+  bench run codex <case> --profile <id> [--suite <suite.yaml>] [--control]
+  bench run claude prepare <case> --profile <id> [--suite <suite.yaml>] [--control]
   bench run validate <run-dir> [--suite <suite.yaml>]
   bench run usage <run-dir> --input N --output N --cache-read N --cache-write N [--suite <suite.yaml>]
   bench run usage-from-transcript <run-dir> <transcript.jsonl> [--suite <suite.yaml>]
@@ -51,7 +51,12 @@ Commands:
   bench review adjudicate [--suite <suite.yaml>]
   bench report build [--suite <suite.yaml>]
   bench truth build [--suite <suite.yaml>]
-  bench score report [--suite <suite.yaml>] [--tolerance N]
+  bench score report [--suite <suite.yaml>] [--tolerance N] [--span-cap N]
+
+--control scans the patched fix commit instead of the vulnerable parent; findings
+on the fixed region are confirmed false positives (negative control).
+--span-cap denies detection credit to findings whose locations total more than
+N lines (default 40, 0 disables) — one giant range and many tiled ranges both fail.
 `);
   process.exit(exitCode);
 }
@@ -89,12 +94,14 @@ async function main(): Promise<void> {
   const suiteFile = option(args, "--suite", defaultSuite);
   const { suite } = await loadSuite(root, suiteFile);
 
+  const variant = args.includes("--control") ? "control" as const : "scan" as const;
+
   if (args[0] === "run" && args[1] === "codex") {
     const fixture = suiteCase(suite, args[2] ?? "");
     const profile = await selectProfile(root, suite, option(args, "--profile"));
     if (profile.adapter !== "codex") throw new Error(`Profile ${profile.id} does not use the codex adapter`);
-    const run = await prepareRun(root, suite, fixture, profile);
-    console.log(`Run directory: ${run.dir}`);
+    const run = await prepareRun(root, suite, fixture, profile, variant);
+    console.log(`Run directory: ${run.dir}${variant === "control" ? " (negative control: patched commit)" : ""}`);
     await executeCodex(root, suite, fixture, profile, run);
     console.log(`Completed: ${run.dir}`);
     return;
@@ -104,7 +111,7 @@ async function main(): Promise<void> {
     const fixture = suiteCase(suite, args[3] ?? "");
     const profile = await selectProfile(root, suite, option(args, "--profile"));
     if (profile.adapter !== "claude-code") throw new Error(`Profile ${profile.id} does not use the claude-code adapter`);
-    const run = await prepareRun(root, suite, fixture, profile);
+    const run = await prepareRun(root, suite, fixture, profile, variant);
     console.log(await prepareClaudeInstructions(root, run, profile));
     return;
   }
@@ -159,14 +166,16 @@ async function main(): Promise<void> {
     const truths = await buildTruthForSuite(root, suite);
     for (const truth of truths) {
       const lines = truth.regions.reduce((sum, region) => sum + (region.end_line - region.start_line + 1), 0);
-      console.log(`${truth.case_id}: scan ${truth.scan_commit.slice(0, 12)} · ${truth.regions.length} region(s), ${lines} line(s) across ${new Set(truth.regions.map((region) => region.file)).size} file(s)`);
+      const cwe = truth.expected_cwe.length ? ` · ${truth.expected_cwe.join(",")}` : "";
+      console.log(`${truth.case_id}: scan ${truth.scan_commit.slice(0, 12)} · fix committed ${truth.fix_committed_at.slice(0, 10)}${cwe} · ${truth.regions.length} region(s), ${lines} line(s) across ${new Set(truth.regions.map((region) => region.file)).size} file(s)`);
     }
     return;
   }
 
   if (args[0] === "score" && args[1] === "report") {
-    const tolerance = args.includes("--tolerance") ? numberOption(args, "--tolerance") : 5;
-    console.log(`Detection report: ${await buildDetectionReport(root, suite, tolerance)}`);
+    const tolerance = args.includes("--tolerance") ? numberOption(args, "--tolerance") : undefined;
+    const spanCap = args.includes("--span-cap") ? numberOption(args, "--span-cap") : undefined;
+    console.log(`Detection report: ${await buildDetectionReport(root, suite, { tolerance, spanCap })}`);
     return;
   }
 

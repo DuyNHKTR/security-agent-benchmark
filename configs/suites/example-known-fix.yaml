@@ -6,16 +6,20 @@ pricing_catalog: configs/pricing/example.yaml
 # fix_commit~1 (the last vulnerable state) and derives ground truth from the fix
 # diff — you never label vulnerabilities yourself. Use a full immutable SHA.
 # `difficulty` is an optional hint that only stratifies the detection report.
+# `cwe` is copied from the advisory (GHSA/CVE list it); when set, a location hit
+# only counts as detected if the finding reports a matching CWE. One id or a list.
 cases:
   - id: xss-fix
     repository: https://github.com/OWNER/REPOSITORY.git
     fix_commit: REPLACE_WITH_FULL_SECURITY_FIX_COMMIT_SHA
     difficulty: easy
+    cwe: CWE-79
     finding_limit: 8
   - id: sqli-fix
     repository: https://github.com/OWNER/REPOSITORY.git
     fix_commit: REPLACE_WITH_FULL_SECURITY_FIX_COMMIT_SHA
     difficulty: hard
+    cwe: [CWE-89]
     finding_limit: 8
 profiles:
   - configs/models/claude-fable.yaml

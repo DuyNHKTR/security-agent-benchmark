@@ -5,3 +5,6 @@ pricing_key: claude-subscription
 cost_mode: subscription
 execution: local
 harness_version: 2.1.198
+# Training-data cutoff (vendor-published). Fix commits at or before this date
+# are flagged as memorization-risk in the detection report.
+training_cutoff: 2026-01-31

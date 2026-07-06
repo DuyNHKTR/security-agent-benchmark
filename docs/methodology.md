@@ -18,7 +18,7 @@ Severity weights are Critical 5, High 3, Medium 1.5, Low 0.5, and Informational 
 
 Each hallucinated file or symbol costs 3 points. Unsafe runnable payloads cost 10. Unsupported High/Critical findings are capped at 6. Duplicate findings contribute zero.
 
-Secondary metrics include precision after adjudication, validated High/Critical yield, cost per validated High/Critical finding, attack-surface mapping, prioritization, schema compliance, token use, latency, disposition agreement, and Cohen's kappa. Recall is intentionally absent until known or seeded vulnerabilities provide ground truth.
+Secondary metrics include precision after adjudication, validated High/Critical yield, cost per validated High/Critical finding, attack-surface mapping, prioritization, schema compliance, token use, latency, disposition agreement, and Cohen's kappa. Recall is intentionally absent from this pipeline; the ground-truth detection mode measures it (with Wilson confidence intervals, exact McNemar pairwise tests, CWE-gated detection, a location span cap, negative-control false positives, and training-cutoff contamination flags — see [Ground-truth detection](ground-truth.md)).
 
 ## Cost
 

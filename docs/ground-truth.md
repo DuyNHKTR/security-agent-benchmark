@@ -33,22 +33,38 @@ those extra locations are not in the ground truth — a model could find a real 
 and be scored as off-target. This measures *detection of the patched instance*, not
 completeness of the class. Prefer fixes that are tightly scoped to the vulnerability.
 
+### Optional advisory metadata (still no labeling)
+
+Two per-case fields sharpen scoring and cost nothing but a copy-paste from the
+advisory that led you to the fix commit:
+
+- `cwe` — the advisory's CWE id(s), e.g. `cwe: CWE-79` or `cwe: [CWE-79, CWE-80]`.
+  GHSA and CVE entries list this. When set, a location hit only counts as **detected**
+  if an on-target finding reports a matching CWE; right-lines-wrong-reason scores
+  **loc-only** instead. Without it, location overlap alone counts as detected.
+- `training_cutoff` (per model profile) — the vendor-published training cutoff.
+  Cases whose fix commit predates it are marked **†** in the matrix: the model may
+  remember the patch rather than find the bug. Prefer fixes committed after every
+  profile's cutoff; treat † cells as soft evidence.
+
 ## Architecture
 
 ```
 Suite (fix_commit cases)
         │  git rev-parse fix_commit~1        → scan commit (pinned, immutable)
         ▼
-Fixture cache ── git diff fix~1 fix ──► truth.json   (file + line regions)
-        │
+Fixture cache ── git diff fix~1 fix ──► truth.json   (pre- and post-image regions,
+        │                                             fix date, expected CWEs)
         ▼
 Pinned workspace ──► model scan (Claude Code / Codex) ──► report.json
+        │            (--control variant scans fix_commit itself)
+        ▼
+Scorer: span-capped location overlap (±tolerance) + CWE agreement
         │
         ▼
-Scorer: does any finding location overlap a truth region (±tolerance lines)?
-        │
-        ▼
-detection.json / detection.csv / detection.html  (recall, matrix, precision proxy)
+detection.json / detection.csv / detection.html
+  (recall + 95% CI, strict recall, matrix, McNemar pairs, calibration,
+   confirmed false positives from control runs)
 ```
 
 Everything upstream of the scorer reuses the existing harness — SHA-pinned fixtures,
@@ -78,9 +94,34 @@ npm run bench -- score report --suite configs/suites/detection.yaml
 ```
 
 `score report` re-derives truth if needed, scores the latest complete run per
-(model, case), writes a `score.json` beside each run, and emits `detection.{json,csv,html}`
-under `runs/<suite>/reports/`. Use `--tolerance N` to change the line-overlap window
-(default ±5).
+(model, case, variant), writes a `score.json` beside each run, and emits
+`detection.{json,csv,html}` under `runs/<suite>/reports/`. Use `--tolerance N` to
+change the line-overlap window (default ±5) and `--span-cap N` to change how many
+total lines a finding may cite and still earn credit (default 40; 0 disables). The
+cap is on the finding's **total** cited lines, so neither one giant range nor many
+small ranges tiling the repo can farm overlap credit.
+
+### Negative controls (recommended)
+
+Re-run each case with `--control` appended to the same `run codex` / `run claude
+prepare` command. The workspace is built from `fix_commit` itself — the patched
+code — so the bug is provably absent. Scoring uses the fix diff's post-image lines:
+
+- A finding on the patched region is a **confirmed false positive** (not a proxy —
+  git proves the bug is gone there). Hunks that only *deleted* lines produce no
+  control region: no patched line exists at that offset, so nothing there can be
+  called a confirmed false positive. A case whose fix is deletion-only therefore
+  has no evaluable control site at all — its control runs are excluded from the
+  discrimination numbers instead of counting as automatic passes.
+- **Discrimination** = flagged the vulnerable commit *and* stayed clean at the
+  patched site. A model that flags both is pattern-matching or remembering, not
+  analyzing. This doubles as a practical contamination probe. A vague, over-broad
+  finding overlapping the patched region voids discrimination even though it is
+  too imprecise to count as a confirmed false positive.
+
+Control runs are optional per case; the report only shows the section when at
+least one exists. They roughly double run cost — prioritize them for cases where
+models score suspiciously well.
 
 ## What to expect
 
@@ -94,22 +135,30 @@ under `runs/<suite>/reports/`. Use `--tolerance N` to change the line-overlap wi
 
 ## Reading the report (`detection.html`)
 
-Open `runs/<suite>/reports/detection.html`. Three sections:
+Open `runs/<suite>/reports/detection.html`.
 
-1. **Recall bars** — the headline: share of known vulnerabilities each model located.
-   `80% (4/5)` means it found 4 of the 5 seeded bugs.
-2. **Detection matrix** — one row per vulnerability, one column per model. Cell colors:
+1. **Recall bars** — the headline: share of known vulnerabilities each model detected,
+   with a **95% Wilson interval** drawn on each bar. Overlapping intervals mean the
+   suite is too small to rank those models — add cases instead of reading the order.
+2. **Detection matrix** — one row per vulnerability, one column per model. Cells:
    - **exact** (green) — a finding landed on the fixed line(s).
    - **fuzzy** (yellow) — within ±tolerance lines; right area, imprecise.
+   - **loc-only** (orange) — right lines, but no on-target finding reported the
+     advisory's CWE: probably lucky overlap, not understanding.
    - **miss** (red) — the model reported findings but none on this bug.
    - **no run** (grey) — refused, incomplete, or absent.
-   This is where you see *which kinds* of bugs a model misses — scan a red row to spot a
-   vulnerability class every model struggles with, or a red column for a weak model.
-3. **Summary table** — per model: recall, exact/fuzzy/no-run counts, and
-   *on-target findings* (share of all reported findings that hit a known bug). Treat
-   on-target as a **directional** precision signal, not a false-positive rate: an
-   "off-target" finding may be a real bug outside the seeded set, so it is not
-   necessarily wrong.
+   - **†** — the fix predates that model's training cutoff (memorization possible).
+3. **Summary table** — recall with CI, **strict recall** (exact-only), loc-only and
+   oversized-only counts (findings whose only overlap came from a location wider than
+   the span cap — a gaming/vagueness signal), and *on-target findings*. On-target is
+   **directional** precision: an off-target finding may be a real unseeded bug.
+4. **Negative controls** — confirmed false positives and discrimination, when control
+   runs exist (see above).
+5. **Confidence calibration** — on-target rate split by the model's own reported
+   confidence. A calibrated model's "high" beats its "low"; flat calibration means
+   the confidence field carries no information.
+6. **Pairwise McNemar** — exact test on paired per-case outcomes (refusals count as
+   misses). p ≥ 0.05: the suite cannot distinguish that pair of models.
 
 Stratify by difficulty (the matrix's `Diff.` column): the capability gap between
 frontier models shows up almost entirely on the hard cases; everyone finds the easy ones.

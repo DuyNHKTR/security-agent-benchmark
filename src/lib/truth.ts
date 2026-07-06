@@ -15,26 +15,44 @@ function ignored(file: string): boolean {
   return IGNORE_DIR.test(file) || IGNORE_EXT.test(file) || IGNORE_NAME.test(file);
 }
 
+export type DiffSide = "pre" | "post";
+
 /**
- * Parse `git diff --unified=0` and return, per changed file, the line ranges in
- * the PRE-image (the vulnerable commit) that the fix modified. Those ranges are
- * where the vulnerability lived. Pure additions (the fix inserts a check) are
- * anchored to the insertion point as a two-line window.
+ * Parse `git diff --unified=0` and return, per changed file, the line ranges
+ * the fix touched. "pre" reads the -side (the vulnerable commit): where the
+ * vulnerability lived, used to score scan runs. "post" reads the +side (the
+ * fixed commit): where the patch landed, used to score control runs — any
+ * finding there flags code that is provably no longer vulnerable.
+ * Pure insertions anchor a two-line pre-image window at the insertion point
+ * (the fix added a check where the vulnerability lived). Pure deletions are
+ * dropped from the post image: no patched line exists there, so a control-run
+ * finding at that offset cannot be called a confirmed false positive.
  */
-export function parseUnifiedDiff(diff: string): TruthRegion[] {
+export function parseUnifiedDiff(diff: string, side: DiffSide = "pre"): TruthRegion[] {
   const regions: TruthRegion[] = [];
-  let file = "";
+  let preFile = "";
+  let postFile = "";
   for (const line of diff.split(/\r?\n/)) {
     if (line.startsWith("--- ")) {
       const raw = line.slice(4).trim();
-      file = raw === "/dev/null" ? "" : raw.replace(/^a\//, "");
+      preFile = raw === "/dev/null" ? "" : raw.replace(/^a\//, "");
+    } else if (line.startsWith("+++ ")) {
+      const raw = line.slice(4).trim();
+      postFile = raw === "/dev/null" ? "" : raw.replace(/^b\//, "");
     } else if (line.startsWith("@@")) {
-      const match = /^@@ -(\d+)(?:,(\d+))? \+/.exec(line);
+      const match = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
+      const file = side === "pre" ? preFile : postFile;
       if (!match || !file || ignored(file)) continue;
-      const start = Number(match[1]);
-      const count = match[2] === undefined ? 1 : Number(match[2]);
-      if (count === 0) regions.push({ file, start_line: Math.max(1, start), end_line: Math.max(1, start) + 1 });
-      else regions.push({ file, start_line: start, end_line: start + count - 1 });
+      const start = Number(side === "pre" ? match[1] : match[3]);
+      const count = side === "pre"
+        ? (match[2] === undefined ? 1 : Number(match[2]))
+        : (match[4] === undefined ? 1 : Number(match[4]));
+      if (count === 0) {
+        if (side === "post") continue;
+        regions.push({ file, start_line: Math.max(1, start), end_line: Math.max(1, start) + 1 });
+      } else {
+        regions.push({ file, start_line: start, end_line: start + count - 1 });
+      }
     }
   }
   return regions;
@@ -63,12 +81,30 @@ export function mergeRegions(regions: TruthRegion[]): TruthRegion[] {
   return merged;
 }
 
+/** Normalize advisory CWE ids ("cwe-79", "79", "CWE-0079") to "CWE-79". */
+export function normalizeCwe(value: string): string | null {
+  const match = /(\d+)/.exec(value);
+  return match ? `CWE-${Number(match[1])}` : null;
+}
+
+export function expectedCwes(fixture: SuiteCase): string[] {
+  const raw = fixture.cwe === undefined ? [] : Array.isArray(fixture.cwe) ? fixture.cwe : [fixture.cwe];
+  const normalized = raw.map((value) => {
+    const cwe = normalizeCwe(value);
+    if (!cwe) throw new Error(`Case ${fixture.id}: unparseable CWE "${value}" (expected e.g. "CWE-79")`);
+    return cwe;
+  });
+  return [...new Set(normalized)];
+}
+
 export async function deriveTruth(root: string, cache: string, suiteId: string, fixture: SuiteCase): Promise<TruthCase> {
   if (!fixture.fix_commit) throw new Error(`Case ${fixture.id} has no fix_commit; ground truth needs a security-fix commit`);
   const scan = (await requireSuccess("git", ["rev-parse", `${fixture.fix_commit}~1`], cache)).toLowerCase();
+  const committedAt = await requireSuccess("git", ["show", "-s", "--format=%cI", fixture.fix_commit], cache);
   const result = await runProcess("git", ["diff", "--unified=0", "--no-color", "--no-ext-diff", scan, fixture.fix_commit], { cwd: cache });
   if (result.exitCode !== 0) throw new Error(`git diff failed for ${fixture.id}: ${result.stderr.trim()}`);
-  const regions = mergeRegions(parseUnifiedDiff(result.stdout));
+  const regions = mergeRegions(parseUnifiedDiff(result.stdout, "pre"));
+  const controlRegions = mergeRegions(parseUnifiedDiff(result.stdout, "post"));
   if (!regions.length) throw new Error(`Case ${fixture.id}: fix ${fixture.fix_commit} touched no scorable source lines (only tests/docs?). Pick a fix whose diff changes application code.`);
   const truth: TruthCase = {
     schema_version: "1.0",
@@ -76,8 +112,11 @@ export async function deriveTruth(root: string, cache: string, suiteId: string, 
     repository: fixture.repository,
     fix_commit: fixture.fix_commit,
     scan_commit: scan,
+    fix_committed_at: committedAt,
     difficulty: fixture.difficulty ?? "unknown",
-    regions
+    expected_cwe: expectedCwes(fixture),
+    regions,
+    control_regions: controlRegions
   };
   await writeJsonAtomic(path.join(root, ".bench", "truth", suiteId, `${fixture.id}.json`), truth);
   return truth;

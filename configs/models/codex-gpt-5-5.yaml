@@ -4,3 +4,6 @@ model: gpt-5.5
 pricing_key: codex-subscription
 cost_mode: subscription
 execution: local
+# Set from vendor documentation before benchmarking; leaving it unset disables
+# the contamination flag for this profile rather than guessing.
+# training_cutoff: YYYY-MM-DD
