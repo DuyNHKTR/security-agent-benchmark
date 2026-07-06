@@ -72,21 +72,28 @@ export async function executeCodex(root: string, suite: SuiteConfig, fixture: Su
   run.metadata.state = "running";
   run.metadata.started_at = new Date(started).toISOString();
   await writeJsonAtomic(path.join(run.dir, "run.json"), run.metadata);
+  const sandboxArgs = profile.execution === "docker"
+    ? ["--dangerously-bypass-approvals-and-sandbox"] // the container is the sandbox
+    : ["--sandbox", "workspace-write"]; // local: codex's own OS sandbox, writes confined to the workspace
   const codexArgs = [
     "exec", "--ignore-user-config", "--ignore-rules", "--ephemeral",
-    "--dangerously-bypass-approvals-and-sandbox", "--model", profile.model,
+    "--skip-git-repo-check", // the scan workspace has no .git (stripped to avoid leaking the fix)
+    ...sandboxArgs, "--model", profile.model,
     "--cd", profile.execution === "docker" ? "/workspace/target" : run.target,
-    "--output-schema", profile.execution === "docker" ? "/benchmark/schemas/report.schema.json" : path.join(root, "schemas", "report.schema.json"),
+    // No --output-schema: OpenAI structured outputs rejects the report schema (draft-07 const/pattern/etc).
+    // The final message is captured and validated post-hoc with Ajv, same as the Claude path.
     "--json", "--output-last-message", profile.execution === "docker" ? "/output/report.json" : path.join(run.dir, "report.json"), "-"
   ];
   const command = profile.execution === "docker" ? "docker" : "codex";
   const args = profile.execution === "docker"
     ? ["compose", "-f", path.join(root, "docker", "compose.yml"), "run", "--rm", "-T", "agent", "codex", ...codexArgs]
     : codexArgs;
+  const env = dockerEnvironment(root, run);
+  if (profile.execution !== "docker") delete env.OPENAI_API_KEY; // force the ChatGPT subscription login, not an API key
   const rawLog = path.join(run.dir, "raw-events.jsonl");
   const result = await runProcess(command, args, {
     cwd: root,
-    env: dockerEnvironment(root, run),
+    env,
     stdin: run.prompt,
     stdoutFile: rawLog,
     inherit: true
@@ -95,7 +102,7 @@ export async function executeCodex(root: string, suite: SuiteConfig, fixture: Su
   run.metadata.completed_at = new Date(ended).toISOString();
   run.metadata.duration_ms = ended - started;
   run.metadata.usage = await usageFromJsonLines(rawLog, "harness");
-  run.metadata.cost_usd = await calculateCost(resolveFrom(root, suite.pricing_catalog), profile.pricing_key, run.metadata.usage, profile.cost_mode);
+  run.metadata.cost_usd = await calculateCost(resolveFrom(root, suite.pricing_catalog), profile.pricing_key, run.metadata.usage, profile.cost_mode, profile.adapter);
   run.metadata.cost_basis = run.metadata.cost_usd === null ? "unavailable" : profile.cost_mode === "subscription" ? "subscription_allocated" : "api_equivalent";
   if (result.exitCode !== 0) {
     run.metadata.state = "incomplete";
@@ -150,7 +157,7 @@ export async function validateExistingRun(root: string, runDir: string, suite: S
   metadata.duration_ms = metadata.started_at ? Date.parse(metadata.completed_at) - Date.parse(metadata.started_at) : null;
   metadata.state = "complete";
   if (metadata.cost_mode === "subscription") {
-    metadata.cost_usd = await calculateCost(resolveFrom(root, suite.pricing_catalog), metadata.pricing_key, metadata.usage, "subscription");
+    metadata.cost_usd = await calculateCost(resolveFrom(root, suite.pricing_catalog), metadata.pricing_key, metadata.usage, "subscription", metadata.adapter);
     metadata.cost_basis = metadata.cost_usd === null ? "unavailable" : "subscription_allocated";
   }
   await writeJsonAtomic(metadataFile, metadata);
@@ -161,7 +168,7 @@ export async function importManualUsage(root: string, runDir: string, suite: Sui
   const file = path.join(runDir, "run.json");
   const metadata = await readJson<RunMetadata>(file);
   metadata.usage = { ...usage, provenance: "manual" };
-  metadata.cost_usd = await calculateCost(resolveFrom(root, suite.pricing_catalog), metadata.pricing_key, metadata.usage, metadata.cost_mode);
+  metadata.cost_usd = await calculateCost(resolveFrom(root, suite.pricing_catalog), metadata.pricing_key, metadata.usage, metadata.cost_mode, metadata.adapter);
   metadata.cost_basis = metadata.cost_usd === null ? "unavailable" : metadata.cost_mode === "subscription" ? "subscription_allocated" : "api_equivalent";
   await writeJsonAtomic(file, metadata);
 }
@@ -174,7 +181,7 @@ export async function importUsageTranscript(root: string, runDir: string, suite:
   const file = path.join(runDir, "run.json");
   const metadata = await readJson<RunMetadata>(file);
   metadata.usage = usage;
-  metadata.cost_usd = await calculateCost(resolveFrom(root, suite.pricing_catalog), metadata.pricing_key, usage, metadata.cost_mode);
+  metadata.cost_usd = await calculateCost(resolveFrom(root, suite.pricing_catalog), metadata.pricing_key, usage, metadata.cost_mode, metadata.adapter);
   metadata.cost_basis = metadata.cost_usd === null ? "unavailable" : metadata.cost_mode === "subscription" ? "subscription_allocated" : "api_equivalent";
   await writeJsonAtomic(file, metadata);
 }

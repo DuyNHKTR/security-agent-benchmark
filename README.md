@@ -16,16 +16,17 @@ Two evaluation modes share the same runner:
 
 - Node.js 22+
 - Git
-- Docker Desktop / Docker Engine with Compose for Codex
-- A dedicated `OPENAI_API_KEY` for Codex
-- Claude Code logged into a paid Claude subscription; Claude API keys are not used
+- Codex logged into a ChatGPT subscription (`codex login`) for the Codex profile; runs locally and fully automated. Claude API keys / `OPENAI_API_KEY` are not used.
+- Claude Code logged into a paid Claude subscription; Claude API keys are not used. The Claude route is interactive (human in the loop); the Codex route is not.
+- Docker + a dedicated `OPENAI_API_KEY` only if you opt into the isolated Docker Codex variant (see [Codex runbook](docs/run-codex.md)).
+
+Both default model routes are subscription-based. You only need one route's login if you benchmark a subset of profiles.
 
 ## Setup
 
 ```powershell
 npm install
 npm run build
-docker build -t security-agent-benchmark-agent:local -f docker/Dockerfile .
 Copy-Item configs/suites/example.yaml configs/suites/enterprise.yaml
 ```
 

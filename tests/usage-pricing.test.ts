@@ -14,8 +14,13 @@ test("normalizes final usage event and computes API-equivalent cost", async () =
   assert.equal(usage.input_tokens, 1_000_000);
   const catalog = path.join(dir, "pricing.yaml");
   await writeFile(catalog, "version: test\ncurrency: USD\nrates:\n  model:\n    input_per_million: 2\n    output_per_million: 8\n    cache_read_per_million: 1\n");
-  assert.equal(await calculateCost(catalog, "model", usage, "token"), 6.1);
-  assert.equal(await calculateCost(catalog, "missing", usage, "token"), null);
+  // codex (OpenAI-style): input_tokens includes the 100k cache hits, so they are billed once at
+  // the cache-read rate → (1M-100k)*2 + 500k*8 + 100k*1 = 5.9
+  assert.equal(await calculateCost(catalog, "model", usage, "token", "codex"), 5.9);
+  // claude-code (Anthropic-style): input_tokens already excludes cache, so no subtraction →
+  // 1M*2 + 500k*8 + 100k*1 = 6.1
+  assert.equal(await calculateCost(catalog, "model", usage, "token", "claude-code"), 6.1);
+  assert.equal(await calculateCost(catalog, "missing", usage, "token", "codex"), null);
 });
 
 test("allocates subscription cost per completed scan", async () => {
@@ -23,5 +28,5 @@ test("allocates subscription cost per completed scan", async () => {
   const catalog = path.join(dir, "pricing.yaml");
   await writeFile(catalog, "version: test\ncurrency: USD\nrates: {}\nsubscriptions:\n  claude:\n    monthly_usd: 200\n    scans_per_month: 40\n");
   const usage = { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, provenance: "unavailable" as const };
-  assert.equal(await calculateCost(catalog, "claude", usage, "subscription"), 5);
+  assert.equal(await calculateCost(catalog, "claude", usage, "subscription", "claude-code"), 5);
 });

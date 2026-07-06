@@ -1,6 +1,6 @@
 id: codex-gpt-5-5
 adapter: codex
 model: gpt-5.5
-pricing_key: gpt-5.5
-cost_mode: token
-execution: docker
+pricing_key: codex-subscription
+cost_mode: subscription
+execution: local
