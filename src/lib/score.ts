@@ -9,6 +9,8 @@ import { ensureDir, readJson, writeJsonAtomic } from "./fs.js";
 import { prepareFixture } from "./fixtures.js";
 import { deriveTruth, normalizeCwe } from "./truth.js";
 import { mcnemarExact, wilsonInterval, type Interval } from "./stats.js";
+import { fmt, locales, reportLangs, type ReportLang, type ReportStrings } from "./report-i18n.js";
+import { findBrowser, printToPdf } from "./pdf.js";
 
 const DEFAULT_TOLERANCE = 5;
 // A finding whose locations total more than this many lines earns no detection
@@ -218,6 +220,8 @@ interface PairwiseComparison {
 export interface DetectionReportOptions {
   tolerance?: number;
   spanCap?: number;
+  /** Print detection.pdf / detection.vi.pdf via a local headless Chrome/Edge (default true; best-effort). */
+  pdf?: boolean;
 }
 
 export async function buildDetectionReport(root: string, suite: SuiteConfig, options: DetectionReportOptions = {}): Promise<string> {
@@ -411,7 +415,27 @@ export async function buildDetectionReport(root: string, suite: SuiteConfig, opt
     return headers.map((key) => JSON.stringify(flat[key] ?? "")).join(",");
   });
   await writeFile(path.join(outputDir, "detection.csv"), `${[headers.join(","), ...csvRows].join("\n")}\n`, "utf8");
-  await writeFile(path.join(outputDir, "detection.html"), renderHtml(payload), "utf8");
+
+  // English keeps the historical name; other languages get a suffixed sibling.
+  const htmlName = (lang: ReportLang) => (lang === "en" ? "detection.html" : `detection.${lang}.html`);
+  const pdfName = (lang: ReportLang) => (lang === "en" ? "detection.pdf" : `detection.${lang}.pdf`);
+  for (const lang of reportLangs) {
+    await writeFile(path.join(outputDir, htmlName(lang)), renderHtml(payload, lang), "utf8");
+  }
+  if (options.pdf ?? true) {
+    const browser = findBrowser();
+    if (!browser) {
+      console.warn("PDF export skipped: no Chrome/Edge/Chromium found — set BENCH_BROWSER to a browser executable, or pass --no-pdf to silence this.");
+    } else {
+      for (const lang of reportLangs) {
+        try {
+          await printToPdf(browser, path.join(outputDir, htmlName(lang)), path.join(outputDir, pdfName(lang)));
+        } catch (error) {
+          console.warn(`PDF export skipped for ${htmlName(lang)}: ${(error as Error).message}`);
+        }
+      }
+    }
+  }
   return outputDir;
 }
 
@@ -435,10 +459,23 @@ interface DetectionPayload {
   matrix: RunScore[];
 }
 
-function renderHtml(payload: DetectionPayload): string {
+function discriminationLabel(profile: Aggregate): string {
+  const control = profile.control;
+  return control.discrimination_evaluated ? `${control.discrimination_passed}/${control.discrimination_evaluated}` : "—";
+}
+
+export function renderHtml(payload: DetectionPayload, lang: ReportLang): string {
+  const t: ReportStrings = locales[lang];
   const scanCells = new Map(payload.matrix.filter((score) => score.variant === "scan").map((score) => [`${score.profile_id}::${score.case_id}`, score]));
   const profileIds = payload.profiles.map((profile) => profile.profile_id);
   const hasControls = payload.profiles.some((profile) => profile.control.cases_with_control > 0);
+
+  const tiles = payload.profiles.map((profile) => `<div class="tile">
+<div class="tile-label">${esc(profile.profile_id)}</div>
+<div class="tile-value">${pct(profile.recall)}</div>
+<div class="tile-sub">${esc(fmt(t.tileDetected, { detected: profile.detected, expected: profile.cases_expected }))} · ${esc(fmt(t.tileCi, { ci: ci(profile.recall_ci95) }))}</div>
+<div class="tile-stats"><span>${esc(t.tileStrict)} <b>${pct(profile.recall_strict)}</b></span><span>${esc(t.tileOnTarget)} <b>${pct(profile.on_target_rate)}</b></span><span>${esc(t.tileDiscrimination)} <b>${discriminationLabel(profile)}</b></span></div>
+</div>`).join("");
 
   const bars = payload.profiles.map((profile) => {
     const width = Math.round((profile.recall ?? 0) * 100);
@@ -446,27 +483,30 @@ function renderHtml(payload: DetectionPayload): string {
     const whisker = interval
       ? `<span class="ci" style="left:${(interval.lower * 100).toFixed(1)}%;width:${((interval.upper - interval.lower) * 100).toFixed(1)}%"></span>`
       : "";
-    return `<div class="bar-row"><span class="bar-label">${esc(profile.profile_id)}</span><span class="bar-track"><span class="bar-fill" style="width:${width}%"></span>${whisker}</span><span class="bar-value">${pct(profile.recall)} <small>(${profile.detected}/${profile.cases_expected} · 95% CI ${ci(interval)})</small></span></div>`;
+    return `<div class="bar-row"><span class="bar-label">${esc(profile.profile_id)}</span><span class="bar-track"><span class="bar-fill" style="width:${width}%"></span>${whisker}</span><span class="bar-value">${pct(profile.recall)} <small>${esc(fmt(t.barDetail, { detected: profile.detected, expected: profile.cases_expected, ci: ci(interval) }))}</small></span></div>`;
   }).join("");
 
-  const heatHead = `<tr><th>Vulnerability (case)</th><th>Diff.</th><th>CWE</th>${profileIds.map((id) => `<th>${esc(id)}</th>`).join("")}</tr>`;
+  const heatHead = `<tr><th>${esc(t.thCase)}</th><th>${esc(t.thDifficulty)}</th><th>${esc(t.thCwe)}</th>${profileIds.map((id) => `<th>${esc(id)}</th>`).join("")}</tr>`;
   const heatBody = payload.cases.map((caseInfo) => {
     const row = profileIds.map((profileId) => {
       const score = scanCells.get(`${profileId}::${caseInfo.case_id}`);
-      const mark = score?.contamination_risk ? `<sup title="fix predates this model's training cutoff — memorization possible">†</sup>` : "";
-      if (!score || score.state !== "complete") return `<td class="cell miss-run" title="${esc(score?.state ?? "no run")}">no run${mark}</td>`;
-      if (score.located && !score.detected) return `<td class="cell loc-only" title="right location, CWE mismatch (${score.total_findings} findings)">loc-only${mark}</td>`;
-      if (!score.detected) return `<td class="cell miss" title="${score.total_findings} findings, none on target${score.findings_oversized_only ? `; ${score.findings_oversized_only} oversized-only overlap(s) discarded` : ""}">miss${mark}</td>`;
-      const label = score.localization === "exact" ? "exact" : "≈fuzzy";
-      return `<td class="cell hit ${score.localization}" title="${score.matched_regions}/${score.total_regions} regions">${label}${mark}</td>`;
+      const mark = score?.contamination_risk ? `<sup title="${esc(t.titleContamination)}">†</sup>` : "";
+      if (!score || score.state !== "complete") return `<td class="cell miss-run" title="${esc(score?.state ?? t.cellNoRun)}">${esc(t.cellNoRun)}${mark}</td>`;
+      if (score.located && !score.detected) return `<td class="cell loc-only" title="${esc(fmt(t.titleLocOnly, { findings: score.total_findings }))}">${esc(t.cellLocOnly)}${mark}</td>`;
+      if (!score.detected) {
+        const oversized = score.findings_oversized_only ? fmt(t.titleMissOversized, { oversized: score.findings_oversized_only }) : "";
+        return `<td class="cell miss" title="${esc(fmt(t.titleMiss, { findings: score.total_findings }) + oversized)}">${esc(t.cellMiss)}${mark}</td>`;
+      }
+      const label = score.localization === "exact" ? t.cellExact : t.cellFuzzy;
+      return `<td class="cell hit ${score.localization}" title="${esc(fmt(t.titleHit, { matched: score.matched_regions, total: score.total_regions }))}">${esc(label)}${mark}</td>`;
     }).join("");
     return `<tr><td class="case">${esc(caseInfo.case_id)}</td><td class="diff">${esc(caseInfo.difficulty)}</td><td class="diff">${esc(caseInfo.expected_cwe.join(", ") || "—")}</td>${row}</tr>`;
   }).join("");
 
-  const summaryHead = `<tr><th>Model</th><th>Recall</th><th>95% CI</th><th>Strict recall</th><th>Detected</th><th>Loc-only</th><th>Exact</th><th>Fuzzy</th><th>No run</th><th>On-target findings</th><th>Oversized-only</th><th>Contam. cases</th></tr>`;
+  const summaryHead = `<tr><th>${esc(t.thModel)}</th><th>${esc(t.thRecall)}</th><th>${esc(t.thCi)}</th><th>${esc(t.thStrict)}</th><th>${esc(t.thDetected)}</th><th>${esc(t.thLocOnly)}</th><th>${esc(t.thExact)}</th><th>${esc(t.thFuzzy)}</th><th>${esc(t.thNoRun)}</th><th>${esc(t.thOnTarget)}</th><th>${esc(t.thOversized)}</th><th>${esc(t.thContaminated)}</th></tr>`;
   const summaryBody = payload.profiles.map((profile) => `<tr><td class="case">${esc(profile.profile_id)}</td><td>${pct(profile.recall)}</td><td>${ci(profile.recall_ci95)}</td><td>${pct(profile.recall_strict)}</td><td>${profile.detected}/${profile.cases_expected}</td><td>${profile.located_only}</td><td>${profile.exact}</td><td>${profile.fuzzy}</td><td>${profile.no_result}</td><td>${pct(profile.on_target_rate)} <small>(${profile.findings_on_target}/${profile.findings_total})</small></td><td>${profile.findings_oversized_only}</td><td>${profile.contaminated_cases ?? "—"}</td></tr>`).join("");
 
-  const calibrationHead = `<tr><th>Model</th><th>High conf.</th><th>Medium conf.</th><th>Low conf.</th></tr>`;
+  const calibrationHead = `<tr><th>${esc(t.thModel)}</th><th>${esc(t.thHighConf)}</th><th>${esc(t.thMediumConf)}</th><th>${esc(t.thLowConf)}</th></tr>`;
   const calibrationBody = payload.profiles.map((profile) => {
     const cell = (level: keyof ConfidenceCalibration) => {
       const bucket = profile.calibration[level];
@@ -476,54 +516,88 @@ function renderHtml(payload: DetectionPayload): string {
   }).join("");
 
   const controlSection = hasControls ? `
-<h2>Negative controls — scans of the patched commit</h2>
-<div class="scroll"><table><thead><tr><th>Model</th><th>Control runs</th><th>Confirmed false positives</th><th>Control findings</th><th>Discrimination</th></tr></thead><tbody>
-${payload.profiles.map((profile) => {
-    const control = profile.control;
-    const discrimination = control.discrimination_evaluated ? `${control.discrimination_passed}/${control.discrimination_evaluated}` : "—";
-    return `<tr><td class="case">${esc(profile.profile_id)}</td><td>${control.cases_with_control}</td><td>${control.confirmed_false_positives}</td><td>${control.control_findings_total}</td><td>${discrimination}</td></tr>`;
-  }).join("")}
+<h2>${esc(t.controlsHeading)}</h2>
+<div class="scroll"><table><thead><tr><th>${esc(t.thModel)}</th><th>${esc(t.thControlRuns)}</th><th>${esc(t.thConfirmedFp)}</th><th>${esc(t.thControlFindings)}</th><th>${esc(t.thDiscrimination)}</th></tr></thead><tbody>
+${payload.profiles.map((profile) => `<tr><td class="case">${esc(profile.profile_id)}</td><td>${profile.control.cases_with_control}</td><td>${profile.control.confirmed_false_positives}</td><td>${profile.control.control_findings_total}</td><td>${discriminationLabel(profile)}</td></tr>`).join("")}
 </tbody></table></div>
-<p class="meta">A confirmed false positive is a finding placed on the patched region while scanning the fixed commit — the bug is provably gone there. Discrimination = cases where the model flagged the vulnerable commit and stayed clean at the patched site on the fixed commit; flagging both suggests pattern-matching or memorization rather than analysis.</p>` : "";
+<p class="note">${esc(t.controlsNote)}</p>` : "";
 
   const pairwiseSection = payload.pairwise.length ? `
-<h2>Pairwise comparison (exact McNemar, paired by case)</h2>
-<div class="scroll"><table><thead><tr><th>A</th><th>B</th><th>Only A</th><th>Only B</th><th>Both</th><th>Neither</th><th>p-value</th></tr></thead><tbody>
+<h2>${esc(t.pairwiseHeading)}</h2>
+<div class="scroll"><table><thead><tr><th>A</th><th>B</th><th>${esc(t.thOnlyA)}</th><th>${esc(t.thOnlyB)}</th><th>${esc(t.thBoth)}</th><th>${esc(t.thNeither)}</th><th>${esc(t.thPValue)}</th></tr></thead><tbody>
 ${payload.pairwise.map((pair) => `<tr><td class="case">${esc(pair.profile_a)}</td><td class="case">${esc(pair.profile_b)}</td><td>${pair.only_a}</td><td>${pair.only_b}</td><td>${pair.both}</td><td>${pair.neither}</td><td>${pair.mcnemar_p === null ? "—" : pair.mcnemar_p.toFixed(3)}</td></tr>`).join("")}
 </tbody></table></div>
-<p class="meta">Same cases, paired outcomes; refusals count as not-detected. p ≥ 0.05 means the suite cannot distinguish the two models — add cases before reading a ranking from the bars above.</p>` : "";
+<p class="note">${esc(t.pairwiseNote)}</p>` : "";
 
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(payload.suite_id)} detection</title><style>
-:root{--bg:#fff;--fg:#1f2328;--muted:#6b7280;--line:#d0d7de;--head:#f6f8fa;--hit:#1a7f37;--hitbg:#dafbe1;--fuzzybg:#fff8c5;--locbg:#ffe8d1;--loc:#953800;--miss:#cf222e;--missbg:#ffebe9;--norun:#eaeef2;--track:#eaeef2;--fill:#0969da;--cifg:#1f2328}
-@media(prefers-color-scheme:dark){:root{--bg:#0d1117;--fg:#e6edf3;--muted:#9198a1;--line:#30363d;--head:#161b22;--hitbg:#1b3226;--fuzzybg:#3a3212;--locbg:#3a2a12;--loc:#e0955a;--missbg:#3a1a1c;--norun:#21262d;--track:#21262d;--fill:#4493f8;--cifg:#e6edf3}}
-*{box-sizing:border-box}body{font:14px/1.5 system-ui,sans-serif;margin:0;padding:32px;background:var(--bg);color:var(--fg)}
-h1{font-size:20px;margin:0 0 4px}h2{font-size:15px;margin:32px 0 12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
-.meta{color:var(--muted);font-size:12px;margin-bottom:8px}
-.bar-row{display:flex;align-items:center;gap:12px;margin:6px 0}.bar-label{width:180px;font-weight:600;text-align:right}
-.bar-track{flex:1;height:22px;background:var(--track);border-radius:4px;overflow:hidden;position:relative}.bar-fill{display:block;height:100%;background:var(--fill)}
-.ci{position:absolute;top:9px;height:4px;border-radius:2px;background:var(--cifg);opacity:.55}
-.bar-value{width:260px}small{color:var(--muted)}
-.scroll{overflow-x:auto}table{border-collapse:collapse;min-width:100%;font-size:13px}
-th,td{border:1px solid var(--line);padding:6px 10px;text-align:center}th{background:var(--head)}
-td.case,td.diff{text-align:left}th:first-child,td.case{text-align:left}
-.cell{font-weight:600}.hit{color:var(--hit);background:var(--hitbg)}.fuzzy{background:var(--fuzzybg)}.loc-only{color:var(--loc);background:var(--locbg)}.miss{color:var(--miss);background:var(--missbg)}.miss-run{color:var(--muted);background:var(--norun)}
-.legend{display:flex;gap:16px;flex-wrap:wrap;margin:10px 0;font-size:12px;color:var(--muted)}.legend span{display:inline-flex;align-items:center;gap:6px}.swatch{width:12px;height:12px;border-radius:3px;display:inline-block}
+  const lightVars = `--page:#f9f9f7;--surface:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--line:#e1e0d9;--head:#f3f2ef;--fill:#2a78d6;--track:#cde2fb;--ciw:#0b0b0b;--hitbg:#dbf1db;--fuzzybg:#fdf0d2;--locbg:#fbe6de;--missbg:#f8dcdc;--norunbg:#f0efec`;
+  const darkVars = `--page:#0d0d0d;--surface:#1a1a19;--ink:#ffffff;--ink2:#c3c2b7;--muted:#898781;--line:#2c2c2a;--head:#232321;--fill:#3987e5;--track:#104281;--ciw:#ffffff;--hitbg:#163c16;--fuzzybg:#524019;--locbg:#4e342a;--missbg:#472222;--norunbg:#232322`;
+
+  return `<!doctype html><html lang="${lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(fmt(t.docTitle, { suite: payload.suite_id }))}</title><style>
+:root{${lightVars}}
+@media(prefers-color-scheme:dark){:root{${darkVars}}}
+*{box-sizing:border-box}
+body{font:14px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif;margin:0;background:var(--page);color:var(--ink)}
+.page{max-width:1080px;margin:0 auto;padding:40px 32px 56px}
+h1{font-size:24px;font-weight:650;margin:0 0 6px;letter-spacing:-.01em}
+.subtitle{color:var(--ink2);margin:0 0 10px;font-size:14px}
+.meta{color:var(--muted);font-size:12px;margin:0}
+h2{font-size:13px;margin:36px 0 12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-weight:600}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px;margin-top:28px}
+.tile{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px 18px}
+.tile-label{font-size:13px;font-weight:600;color:var(--ink2);margin-bottom:6px;overflow-wrap:anywhere}
+.tile-value{font-size:34px;font-weight:600;line-height:1.1}
+.tile-sub{color:var(--muted);font-size:12px;margin-top:4px}
+.tile-stats{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:12px;padding-top:10px;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}
+.tile-stats b{color:var(--ink);font-weight:600}
+.bar-row{display:flex;align-items:center;gap:12px;margin:8px 0}
+.bar-label{width:190px;font-weight:600;text-align:right;font-size:13px;color:var(--ink2);overflow-wrap:anywhere}
+.bar-track{flex:1;height:20px;background:var(--track);border-radius:4px;overflow:hidden;position:relative}
+.bar-fill{display:block;height:100%;background:var(--fill);border-radius:0 4px 4px 0}
+.ci{position:absolute;top:8px;height:4px;border-radius:2px;background:var(--ciw);opacity:.55}
+.bar-value{width:290px;font-size:13px}
+small{color:var(--muted)}
+.scroll{overflow-x:auto;background:var(--surface);border:1px solid var(--line);border-radius:10px}
+table{border-collapse:collapse;min-width:100%;font-size:13px}
+th,td{border-bottom:1px solid var(--line);padding:8px 12px;text-align:center;font-variant-numeric:tabular-nums}
+th{background:var(--head);color:var(--ink2);font-weight:600;font-size:12px}
+tr:last-child td{border-bottom:0}
+th:first-child,td.case{text-align:left}td.diff{text-align:left;color:var(--ink2)}
+.cell{font-weight:600;font-size:12px}
+.hit{background:var(--hitbg)}.fuzzy{background:var(--fuzzybg)}.loc-only{background:var(--locbg)}.miss{background:var(--missbg)}.miss-run{background:var(--norunbg);color:var(--muted)}
+.legend{display:flex;gap:8px 18px;flex-wrap:wrap;margin:10px 0 12px;font-size:12px;color:var(--ink2)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.swatch{width:12px;height:12px;border-radius:3px;display:inline-block;border:1px solid var(--line)}
+.note{color:var(--muted);font-size:12px;margin:10px 0 0;max-width:860px}
 sup{margin-left:2px}
+@page{margin:14mm 12mm}
+@media print{
+:root{${lightVars}}
+*{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+body{background:#fff}
+.page{max-width:none;padding:0}
+.scroll{overflow:visible;border-radius:6px}
+thead{display:table-header-group}
+tr,.tile,.bar-row{break-inside:avoid}
+h2{break-after:avoid}
+.tiles{grid-template-columns:repeat(3,1fr)}
+}
 </style></head><body>
-<h1>${esc(payload.suite_id)} — vulnerability detection</h1>
-<div class="meta">Generated ${esc(payload.generated_at)} · line tolerance ±${payload.tolerance_lines} · location span cap ${payload.span_cap_lines || "off"} · ground truth from security-fix diffs</div>
-<h2>Recall — share of known vulnerabilities each model detected</h2>
+<div class="page">
+<header><h1>${esc(fmt(t.reportTitle, { suite: payload.suite_id }))}</h1><p class="subtitle">${esc(t.reportSubtitle)}</p><p class="meta">${esc(fmt(t.metaLine, { date: payload.generated_at, tolerance: payload.tolerance_lines, spanCap: payload.span_cap_lines || t.spanCapOff }))}</p></header>
+<div class="tiles">${tiles}</div>
+<h2>${esc(t.recallHeading)}</h2>
 ${bars}
-<h2>Detection matrix</h2>
-<div class="legend"><span><i class="swatch" style="background:var(--hitbg)"></i>exact — flagged the fixed line</span><span><i class="swatch" style="background:var(--fuzzybg)"></i>fuzzy — within ±${payload.tolerance_lines} lines</span><span><i class="swatch" style="background:var(--locbg)"></i>loc-only — right lines, wrong CWE</span><span><i class="swatch" style="background:var(--missbg)"></i>miss — findings, none on target</span><span><i class="swatch" style="background:var(--norun)"></i>no run — refused/incomplete/absent</span><span>† — fix predates model's training cutoff</span></div>
+<h2>${esc(t.matrixHeading)}</h2>
+<div class="legend"><span><i class="swatch" style="background:var(--hitbg)"></i>${esc(t.legendExact)}</span><span><i class="swatch" style="background:var(--fuzzybg)"></i>${esc(fmt(t.legendFuzzy, { tolerance: payload.tolerance_lines }))}</span><span><i class="swatch" style="background:var(--locbg)"></i>${esc(t.legendLocOnly)}</span><span><i class="swatch" style="background:var(--missbg)"></i>${esc(t.legendMiss)}</span><span><i class="swatch" style="background:var(--norunbg)"></i>${esc(t.legendNoRun)}</span><span>${esc(t.legendDagger)}</span></div>
 <div class="scroll"><table><thead>${heatHead}</thead><tbody>${heatBody}</tbody></table></div>
-<h2>Summary</h2>
+<h2>${esc(t.summaryHeading)}</h2>
 <div class="scroll"><table><thead>${summaryHead}</thead><tbody>${summaryBody}</tbody></table></div>
 ${controlSection}
-<h2>Confidence calibration — on-target rate by model-reported confidence</h2>
+<h2>${esc(t.calibrationHeading)}</h2>
 <div class="scroll"><table><thead>${calibrationHead}</thead><tbody>${calibrationBody}</tbody></table></div>
-<p class="meta">A well-calibrated model's high-confidence findings hit known vulnerabilities more often than its low-confidence ones. Off-target findings may still be real bugs outside the seeded set, so read rates as directional.</p>
+<p class="note">${esc(t.calibrationNote)}</p>
 ${pairwiseSection}
-<p class="meta">Detected = a span-capped finding location overlaps the fix-diff lines and (when the case sets an expected CWE) an on-target finding reports a matching CWE. Strict recall counts only tolerance-0 localizations. "On-target findings" is a directional precision signal, not a false-positive rate — confirmed false positives come from the negative-control runs.</p>
+<p class="note">${esc(t.methodologyNote)}</p>
+</div>
 </body></html>`;
 }

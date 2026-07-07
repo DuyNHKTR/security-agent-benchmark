@@ -94,8 +94,13 @@ npm run bench -- score report --suite configs/suites/detection.yaml
 ```
 
 `score report` re-derives truth if needed, scores the latest complete run per
-(model, case, variant), writes a `score.json` beside each run, and emits
-`detection.{json,csv,html}` under `runs/<suite>/reports/`. Use `--tolerance N` to
+(model, case, variant), writes a `score.json` beside each run, and emits under
+`runs/<suite>/reports/`: `detection.json`, `detection.csv`, the visual report in
+two languages (`detection.html` English, `detection.vi.html` Vietnamese), and —
+when a locally installed Chrome/Edge/Chromium is found — matching PDFs
+(`detection.pdf`, `detection.vi.pdf`). PDF export is best-effort: point
+`BENCH_BROWSER` at a browser executable to override discovery, or pass
+`--no-pdf` to skip it; a missing browser never fails scoring. Use `--tolerance N` to
 change the line-overlap window (default ±5) and `--span-cap N` to change how many
 total lines a finding may cite and still earn credit (default 40; 0 disables). The
 cap is on the finding's **total** cited lines, so neither one giant range nor many
@@ -135,7 +140,11 @@ models score suspiciously well.
 
 ## Reading the report (`detection.html`)
 
-Open `runs/<suite>/reports/detection.html`.
+Open `runs/<suite>/reports/detection.html` (or `detection.vi.html` — same report,
+Vietnamese; the state labels `exact`/`fuzzy`/`loc-only`/`miss`/`no run` stay in
+English in both so they match `detection.json` and `detection.csv`). The report
+opens with a per-model **at-a-glance tile row** (recall with CI, strict recall,
+on-target rate, discrimination) before the sections below.
 
 1. **Recall bars** — the headline: share of known vulnerabilities each model detected,
    with a **95% Wilson interval** drawn on each bar. Overlapping intervals mean the

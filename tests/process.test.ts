@@ -18,3 +18,12 @@ test("waits for redirected stdout to finish writing", async () => {
   assert.equal(result.exitCode, 0);
   assert.equal((await readFile(output, "utf8")).length, expected.length);
 });
+
+test("kills a child that outlives timeoutMs and rejects", async () => {
+  const started = Date.now();
+  await assert.rejects(
+    runProcess(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], { timeoutMs: 500 }),
+    /timed out after 500ms/
+  );
+  assert.ok(Date.now() - started < 10_000, "rejects promptly instead of waiting for the child's own exit");
+});

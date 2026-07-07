@@ -13,6 +13,8 @@ export function runProcess(command: string, args: string[], options: {
   stdin?: string;
   stdoutFile?: string;
   inherit?: boolean;
+  /** Kill the child and reject if it has not exited after this many milliseconds. */
+  timeoutMs?: number;
 } = {}): Promise<ProcessResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -21,6 +23,13 @@ export function runProcess(command: string, args: string[], options: {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true
     });
+    let timedOut = false;
+    const timer = options.timeoutMs
+      ? setTimeout(() => {
+          timedOut = true;
+          child.kill("SIGKILL");
+        }, options.timeoutMs)
+      : null;
     const chunks: Buffer[] = [];
     const errors: Buffer[] = [];
     const log = options.stdoutFile ? createWriteStream(options.stdoutFile) : null;
@@ -33,13 +42,20 @@ export function runProcess(command: string, args: string[], options: {
       errors.push(chunk);
       if (options.inherit) process.stderr.write(chunk);
     });
-    child.on("error", reject);
+    child.on("error", (error) => {
+      if (timer) clearTimeout(timer);
+      reject(error);
+    });
     child.on("close", (code) => {
-      const complete = () => resolve({
-        exitCode: code ?? 1,
-        stdout: Buffer.concat(chunks).toString("utf8"),
-        stderr: Buffer.concat(errors).toString("utf8")
-      });
+      if (timer) clearTimeout(timer);
+      const complete = () => {
+        if (timedOut) reject(new Error(`${command} timed out after ${options.timeoutMs}ms and was killed`));
+        else resolve({
+          exitCode: code ?? 1,
+          stdout: Buffer.concat(chunks).toString("utf8"),
+          stderr: Buffer.concat(errors).toString("utf8")
+        });
+      };
       if (log) log.end(complete);
       else complete();
     });

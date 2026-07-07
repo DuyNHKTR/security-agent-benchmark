@@ -51,12 +51,15 @@ Commands:
   bench review adjudicate [--suite <suite.yaml>]
   bench report build [--suite <suite.yaml>]
   bench truth build [--suite <suite.yaml>]
-  bench score report [--suite <suite.yaml>] [--tolerance N] [--span-cap N]
+  bench score report [--suite <suite.yaml>] [--tolerance N] [--span-cap N] [--no-pdf]
 
 --control scans the patched fix commit instead of the vulnerable parent; findings
 on the fixed region are confirmed false positives (negative control).
 --span-cap denies detection credit to findings whose locations total more than
 N lines (default 40, 0 disables) — one giant range and many tiled ranges both fail.
+score report writes detection.html (English) and detection.vi.html (Vietnamese),
+plus detection.pdf / detection.vi.pdf via a locally installed Chrome/Edge/Chromium
+(set BENCH_BROWSER to point at one; --no-pdf skips PDF export).
 `);
   process.exit(exitCode);
 }
@@ -175,7 +178,8 @@ async function main(): Promise<void> {
   if (args[0] === "score" && args[1] === "report") {
     const tolerance = args.includes("--tolerance") ? numberOption(args, "--tolerance") : undefined;
     const spanCap = args.includes("--span-cap") ? numberOption(args, "--span-cap") : undefined;
-    console.log(`Detection report: ${await buildDetectionReport(root, suite, { tolerance, spanCap })}`);
+    const pdf = !args.includes("--no-pdf");
+    console.log(`Detection report: ${await buildDetectionReport(root, suite, { tolerance, spanCap, pdf })}`);
     return;
   }
 

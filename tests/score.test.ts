@@ -6,6 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import { parseUnifiedDiff, mergeRegions, normalizeCwe, expectedCwes } from "../src/lib/truth.js";
 import { scoreReport, buildDetectionReport, fixPredatesCutoff } from "../src/lib/score.js";
+import { fmt, locales, reportLangs } from "../src/lib/report-i18n.js";
+import { findBrowser } from "../src/lib/pdf.js";
 import { wilsonInterval, mcnemarExact } from "../src/lib/stats.js";
 import { writeJsonAtomic } from "../src/lib/fs.js";
 import { requireSuccess } from "../src/lib/process.js";
@@ -284,7 +286,7 @@ test("derives ground truth from a fix commit and builds a detection report", asy
   control2Report.findings[0].locations[0] = { path: "eval.js", start_line: 1, end_line: 2, symbol: "x" };
   await writeJsonAtomic(path.join(control2Dir, "report.json"), control2Report);
 
-  const outputDir = await buildDetectionReport(root, suite);
+  const outputDir = await buildDetectionReport(root, suite, { pdf: false });
   const detection = JSON.parse(await readFile(path.join(outputDir, "detection.json"), "utf8"));
   assert.equal(detection.profiles[0].profile_id, "model-x");
   assert.equal(detection.profiles[0].recall, 1);
@@ -309,19 +311,67 @@ test("derives ground truth from a fix commit and builds a detection report", asy
   assert.equal(pair.only_a + pair.only_b, 2);
   assert.equal(typeof pair.mcnemar_p, "number");
   const html = await readFile(path.join(outputDir, "detection.html"), "utf8");
+  assert.match(html, /<html lang="en">/);
   assert.match(html, /detection matrix/i);
   assert.match(html, /Negative controls/);
   assert.match(html, /Confidence calibration/);
   assert.match(html, /McNemar/);
+  // Vietnamese sibling: same report, translated chrome, identical state labels.
+  const htmlVi = await readFile(path.join(outputDir, "detection.vi.html"), "utf8");
+  assert.match(htmlVi, /<html lang="vi">/);
+  assert.match(htmlVi, /Ma trận phát hiện/);
+  assert.match(htmlVi, /Đối chứng âm/);
+  assert.match(htmlVi, /McNemar/);
+  assert.match(htmlVi, /class="cell hit exact"/);
 
   // A vague oversized control finding that overlaps the patched region earns no
   // confirmed-FP count but must void discrimination (it is not "clean").
   const vagueControl = validReport();
   vagueControl.findings[0].locations = [{ path: "app.js", start_line: 1, end_line: 500, symbol: "everything" }];
   await writeJsonAtomic(path.join(controlDir, "report.json"), vagueControl);
-  const rescored = JSON.parse(await readFile(path.join(await buildDetectionReport(root, suite), "detection.json"), "utf8"));
+  const rescored = JSON.parse(await readFile(path.join(await buildDetectionReport(root, suite, { pdf: false }), "detection.json"), "utf8"));
   const modelX = rescored.profiles.find((profile: { profile_id: string }) => profile.profile_id === "model-x");
   assert.equal(modelX.control.confirmed_false_positives, 0);
   assert.equal(modelX.control.discrimination_evaluated, 1);
   assert.equal(modelX.control.discrimination_passed, 0);
+});
+
+test("report locales cover every key in every language", () => {
+  const reference = Object.keys(locales.en).sort();
+  for (const lang of reportLangs) {
+    assert.deepEqual(Object.keys(locales[lang]).sort(), reference, `locale ${lang} key set`);
+    for (const [key, value] of Object.entries(locales[lang])) {
+      assert.ok(typeof value === "string" && value.trim().length > 0, `locale ${lang}.${key} is non-empty`);
+    }
+  }
+  // Placeholder sets must match across languages so fmt() fills both templates.
+  for (const key of reference) {
+    const placeholders = (value: string) => (value.match(/\{\w+\}/g) ?? []).sort();
+    assert.deepEqual(
+      placeholders(locales.vi[key as keyof typeof locales.vi]),
+      placeholders(locales.en[key as keyof typeof locales.en]),
+      `placeholders of ${key}`
+    );
+  }
+});
+
+test("fmt interpolates and leaves unknown placeholders visible", () => {
+  assert.equal(fmt("{a}/{b} done", { a: 3, b: 4 }), "3/4 done");
+  assert.equal(fmt("missing {nope}", {}), "missing {nope}");
+});
+
+test("findBrowser prefers BENCH_BROWSER, then falls through install locations", () => {
+  const chrome = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+  const edge = "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe";
+  const env = {
+    BENCH_BROWSER: "X:\\custom\\browser.exe",
+    ProgramFiles: "C:\\Program Files",
+    "ProgramFiles(x86)": "C:\\Program Files (x86)"
+  } as NodeJS.ProcessEnv;
+  const existing = (present: string[]) => (candidate: string) => present.includes(candidate);
+  assert.equal(findBrowser({ env, platform: "win32", exists: existing(["X:\\custom\\browser.exe", chrome]) }), "X:\\custom\\browser.exe");
+  assert.equal(findBrowser({ env, platform: "win32", exists: existing([chrome, edge]) }), chrome);
+  assert.equal(findBrowser({ env, platform: "win32", exists: existing([edge]) }), edge);
+  assert.equal(findBrowser({ env, platform: "win32", exists: () => false }), null);
+  assert.equal(findBrowser({ env: {}, platform: "linux", exists: existing(["/usr/bin/chromium"]) }), "/usr/bin/chromium");
 });
